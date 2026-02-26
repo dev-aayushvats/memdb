@@ -5,7 +5,7 @@ class DB {
     map<string, string> data;
 
 public:
-    bool setkey(string key, string val) {
+    bool setKey(string key, string val) {
         if (data.count(key)) {
             return false;
         }
@@ -13,7 +13,7 @@ public:
         return true;
     }
 
-    pair<bool, string> getkey(string key) {
+    pair<bool, string> getKey(string key) {
         auto it = data.find(key);
         if (it != data.end()) {
             return {true, it->second};
@@ -21,7 +21,7 @@ public:
         return {false, ""};
     }
 
-    bool updatekey(string key, string newval) {
+    bool updateKey(string key, string newval) {
         auto it = data.find(key);
 
         if (it != data.end()) {
@@ -31,7 +31,7 @@ public:
         return false;
     }
 
-    bool dropkey(string key) {
+    bool dropKey(string key) {
         auto it = data.find(key);
         if (it != data.end()) {
             data.erase(it);
@@ -51,7 +51,7 @@ class Executor {
 
         string handleSet(vector<string>& args) {
             if (args.size() != 3) return "ERR MISSING_ARGS";
-            if (db.setkey(args[1], args[2])) {
+            if (db.setKey(args[1], args[2])) {
                 return "OK";
             } 
             else {
@@ -61,7 +61,7 @@ class Executor {
 
         string handleGet(vector<string>& args) {
             if (args.size() != 2) return "ERR MISSING_ARGS";
-            auto res = db.getkey(args[1]);
+            auto res = db.getKey(args[1]);
             if (!res.first) {
                 return "ERR KEY_NOT_FOUND";
             }
@@ -72,7 +72,7 @@ class Executor {
 
         string handleUpdate(vector<string>& args) {
             if (args.size() != 3) return "ERR MISSING_ARGS";
-            if (db.updatekey(args[1], args[2])) {
+            if (db.updateKey(args[1], args[2])) {
                 return "OK";
             } else {
                 return "ERR KEY_NOT_FOUND";
@@ -81,7 +81,7 @@ class Executor {
 
         string handleDrop(vector<string>& args) {
             if (args.size() != 2) return "ERR MISSING_ARGS";
-            if (db.dropkey(args[1])) {
+            if (db.dropKey(args[1])) {
                 return "OK";
             } else {
                 return "ERR KEY_NOT_FOUND";
