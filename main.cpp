@@ -39,6 +39,41 @@ public:
         }
         return false;
     }
+
+    bool saveData(string filename) {
+        ofstream outFile(filename);
+
+        if (outFile.is_open()) {
+            for (const auto& [key, val] : data) {
+                outFile << key << ":" << val << endl;
+            }
+
+            outFile.close();
+        }
+        else return false;
+
+        return true;
+    }
+
+    bool loadData(string filename) {
+        ifstream inFile(filename);
+        string line;
+
+        if (inFile.is_open()) {
+            while (getline(inFile, line)) {
+                size_t colon = line.find(":");
+                string key = line.substr(0, colon);
+                string val = line.substr(colon + 1);
+
+                data[key] = val;
+            }
+
+            inFile.close();
+        }
+        else return false;
+
+        return true;
+    }
 };
 
 class Executor {
@@ -88,6 +123,22 @@ class Executor {
             }
         }
 
+        string handleSave(vector<string>& args) {
+            string filename = args[1];
+            if (db.saveData(filename)) {
+                return "OK";
+            }
+            else return "ERR FILE_OPEN_ERR";
+        }
+
+        string handleLoad(vector<string>& args) {
+            string filename = args[1];
+            if (db.loadData(filename)) {
+                return "OK";
+            }
+            else return "ERR FILE_OPEN_ERR";
+        }
+
         unordered_map<string, function<string(vector<string>&)>> handlers;
     
     public:
@@ -97,6 +148,8 @@ class Executor {
             handlers["update"] = [this](vector<string>& args) -> string { return handleUpdate(args); };
             handlers["drop"] = [this](vector<string>& args) -> string { return handleDrop(args); };
             handlers["exit"] = [this](vector<string>& args) -> string { return handleExit(args); };
+            handlers["save"] = [this](vector<string>& args) -> string { return handleSave(args); };
+            handlers["load"] = [this](vector<string>& args) -> string { return handleLoad(args); };
         }
 
         string execute(string& command) {
