@@ -1,101 +1,183 @@
 #include <bits/stdc++.h>
+
 using namespace std;
+namespace fs = std::filesystem;
 
 class DB {
     map<string, string> data;
 
-public:
-    bool setKey(string key, string val) {
-        if (data.count(key)) {
+    public:
+        bool exists(const string& key) {
+            if (data.count(key)) return true;
             return false;
         }
-        data[key] = val;
-        return true;
-    }
 
-    pair<bool, string> getKey(string key) {
-        auto it = data.find(key);
-        if (it != data.end()) {
-            return {true, it->second};
-        }
-        return {false, ""};
-    }
-
-    bool updateKey(string key, string newval) {
-        auto it = data.find(key);
-
-        if (it != data.end()) {
-            it->second = newval;
+        bool setKey(const string& key, const string& val) {
+            if (data.count(key)) return false;
+            data[key] = val;
             return true;
         }
-        return false;
-    }
 
-    bool dropKey(string key) {
-        auto it = data.find(key);
-        if (it != data.end()) {
-            data.erase(it);
+        pair<bool, string> getKey(const string& key) {
+            auto it = data.find(key);
+            if (it != data.end()) {
+                return {true, it->second};
+            }
+            return {false, ""};
+        }
+
+        bool updateKey(const string& key, const string& newval) {
+            auto it = data.find(key);
+
+            if (it != data.end()) {
+                it->second = newval;
+                return true;
+            }
+            return false;
+        }
+
+        bool dropKey(const string& key) {
+            auto it = data.find(key);
+            if (it != data.end()) {
+                data.erase(it);
+                return true;
+            }
+            return false;
+        }
+
+        bool snapshot() {
+            string tempfile = "snapshot.db.tmp";
+            ofstream outFile(tempfile);
+
+            if (outFile.is_open()) {
+                for (const auto& [key, val] : data) {
+                    outFile << key << ":" << val << endl;
+                }
+
+                outFile.close();
+                fs::rename(tempfile, "snapshot.db");
+            }
+            else return false;
+
             return true;
         }
-        return false;
-    }
 
-    bool saveData(string filename) {
-        ofstream outFile(filename);
+        bool loadData() {
+            if (!fs::exists("snapshot.db")) return false;
+            ifstream inFile("snapshot.db");
+            string line;
 
-        if (outFile.is_open()) {
-            for (const auto& [key, val] : data) {
-                outFile << key << ":" << val << endl;
+            if (inFile.is_open()) {
+                while (getline(inFile, line)) {
+                    size_t colon = line.find(":");
+                    if (colon == string::npos) continue;
+                    string key = line.substr(0, colon);
+                    string val = line.substr(colon + 1);
+
+                    data[key] = val;
+                }
+
+                inFile.close();
             }
+            else return false;
 
-            outFile.close();
+            return true;
         }
-        else return false;
+};
 
-        return true;
-    }
-
-    bool loadData(string filename) {
-        ifstream inFile(filename);
-        string line;
-
-        if (inFile.is_open()) {
-            while (getline(inFile, line)) {
-                size_t colon = line.find(":");
-                string key = line.substr(0, colon);
-                string val = line.substr(colon + 1);
-
-                data[key] = val;
+class WALManager {
+    string logfile;
+    
+    public:
+        bool append(const string& logline) {
+            ofstream logFile(logfile, ios::app);
+            
+            if (logFile.is_open()) {
+                logFile << logline << endl;
             }
-
-            inFile.close();
+            else return false;
+            return true;
         }
-        else return false;
+        
+        void replay(DB& db) {
+            ifstream logFile(logfile);
+            string logline;
+            
+            if (logFile.is_open()) {
+                while (getline(logFile, logline)) {
+                    stringstream ss(logline);
+                    string word;
+                    vector<string> args;
+                    
+                    while (getline(ss, word, '|')) {
+                        args.push_back(word);
+                    }
+                    
+                    if (args[0] == "set" && args.size() == 3) {
+                        db.setKey(args[1], args[2]);
+                    }
+                    else if (args[0] == "update" && args.size() == 3) {
+                        db.updateKey(args[1], args[2]);
+                    }
+                    else if (args[0] == "drop" && args.size() == 2) {
+                        db.dropKey(args[1]);
+                    }
+                }
+            }
+        }
 
-        return true;
-    }
+        uintmax_t size() {
+            if (!fs::exists(logfile)) return 0;
+            return fs::file_size(logfile);
+        }
+
+        void truncate() {
+            fs::resize_file(logfile, 0);
+        }
+
+        WALManager(string filename) : logfile(filename) {
+            ofstream touch(filename, ios::app);
+        }
 };
 
 class Executor {
     private:
         DB& db;
+        WALManager& wal;
 
         string handleExit(vector<string>& args) {
             return "EXIT RECV";
         }
 
+        void checkpoint() {
+            db.snapshot();
+            wal.truncate();
+        }
+
         string handleSet(vector<string>& args) {
             if (args.size() != 3) return "ERR MISSING_ARGS";
-            if (db.setKey(args[1], args[2])) {
-                return "OK";
-            } 
-            else {
-                return "ERR DUPLICATE_KEY";
+            string logline = "";
+            for (string& s : args) {
+                logline += s;
+                logline += "|";
             }
+            logline.pop_back();
+
+            if (db.exists(args[1])) return "ERR DUPLICATE_KEY";
+            if (wal.append(logline)) {
+                if (!db.setKey(args[1], args[2])) return "ERR DUPLICATE_KEY";
+                if (wal.size() > 1024) {
+                    checkpoint();
+                }
+                return "OK";
+            }
+            else return "ERR UNABLE_TO_WRITE";
         }
 
         string handleGet(vector<string>& args) {
-            if (args.size() != 2) return "ERR MISSING_ARGS";
+            if (args.size() != 2) return "ERR INCORRECT_ARGS";
+            if (!db.exists(args[1])) return "ERR KEY_NOT_FOUND";
+
             auto res = db.getKey(args[1]);
             if (!res.first) {
                 return "ERR KEY_NOT_FOUND";
@@ -106,50 +188,56 @@ class Executor {
         }
 
         string handleUpdate(vector<string>& args) {
-            if (args.size() != 3) return "ERR MISSING_ARGS";
-            if (db.updateKey(args[1], args[2])) {
+            if (args.size() != 3) return "ERR INCORRECT_ARGS";
+            string logline = "";
+            for (string& s : args) {
+                logline += s;
+                logline += "|";
+            }
+            logline.pop_back();
+
+            if (!db.exists(args[1])) return "ERR KEY_NOT_FOUND";
+            if (wal.append(logline)) {
+                if (!db.updateKey(args[1], args[2])) return "ERR KEY_NOT_FOUND";
+                if (wal.size() > 1024) {
+                    checkpoint();
+                }
                 return "OK";
             } else {
-                return "ERR KEY_NOT_FOUND";
+                return "ERR UNABLE_TO_WRITE";
             }
         }
 
         string handleDrop(vector<string>& args) {
             if (args.size() != 2) return "ERR MISSING_ARGS";
-            if (db.dropKey(args[1])) {
+            string logline = "";
+            for (string& s : args) {
+                logline += s;
+                logline += "|";
+            }
+            logline.pop_back();
+
+            if (!db.exists(args[1])) return "ERR KEY_NOT_FOUND";
+            if (wal.append(logline)) {
+                if (!db.dropKey(args[1])) return "ERR KEY_NOT_FOUND";
+                if (wal.size() > 1024) {
+                    checkpoint();
+                }
                 return "OK";
             } else {
-                return "ERR KEY_NOT_FOUND";
+                return "ERR UNABLE_TO_WRITE";
             }
-        }
-
-        string handleSave(vector<string>& args) {
-            string filename = args[1];
-            if (db.saveData(filename)) {
-                return "OK";
-            }
-            else return "ERR FILE_OPEN_ERR";
-        }
-
-        string handleLoad(vector<string>& args) {
-            string filename = args[1];
-            if (db.loadData(filename)) {
-                return "OK";
-            }
-            else return "ERR FILE_OPEN_ERR";
         }
 
         unordered_map<string, function<string(vector<string>&)>> handlers;
     
     public:
-        Executor(DB& database) : db(database) {
-            handlers["set"] = [this](vector<string>& args) -> string { return handleSet(args); };
-            handlers["get"] = [this](vector<string>& args) -> string { return handleGet(args); };
-            handlers["update"] = [this](vector<string>& args) -> string { return handleUpdate(args); };
-            handlers["drop"] = [this](vector<string>& args) -> string { return handleDrop(args); };
-            handlers["exit"] = [this](vector<string>& args) -> string { return handleExit(args); };
-            handlers["save"] = [this](vector<string>& args) -> string { return handleSave(args); };
-            handlers["load"] = [this](vector<string>& args) -> string { return handleLoad(args); };
+        Executor(DB& database, WALManager& WAL) : db(database), wal(WAL){
+            handlers.emplace("set", [this](vector<string>& args) { return handleSet(args); });
+            handlers.emplace("get", [this](vector<string>& args) { return handleGet(args); });
+            handlers.emplace("update", [this](vector<string>& args) { return handleUpdate(args); });
+            handlers.emplace("drop", [this](vector<string>& args) { return handleDrop(args); });
+            handlers.emplace("exit", [this](vector<string>& args) { return handleExit(args); });
         }
 
         string execute(string& command) {
@@ -175,19 +263,28 @@ class Executor {
 };
 
 int main() {
-    DB db;
     cout << "DB created." << endl;
-    Executor executor(db);
-
-    while (true) {
-        string input;
-        getline(cin, input);
-
-        string response = executor.execute(input);
-
-        cout << response << endl;
-
-        if (response == "EXIT RECV") break;
+    try {
+        DB db;
+    
+        WALManager wal("wal.log");
+        db.loadData();
+        wal.replay(db);
+    
+        Executor executor(db, wal);
+    
+        while (true) {
+            string input;
+            getline(cin, input);
+    
+            string response = executor.execute(input);
+    
+            cout << response << endl;
+    
+            if (response == "EXIT RECV") break;
+        }
+    } catch (const std::exception& e) {
+        cerr << "CRASHED WITH ERROR: " << e.what() << endl;
     }
 
     return 0;
